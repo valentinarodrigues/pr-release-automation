@@ -1,0 +1,181 @@
+name: Release Automation
+
+on:
+  push:
+    branches: [main]
+
+# Prevent recursive runs from the changelog commit itself
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip tag + release creation)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    name: Generate Changelog & Create Release
+    runs-on: ubuntu-latest
+
+    # Skip if the push was the automated changelog commit to avoid infinite loops
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      !contains(github.event.head_commit.message, '[skip-release]')
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Step 1: Generate changelog data ────────────────────────────────────
+      - name: Generate changelog
+        id: changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const generate = require('./scripts/generate-changelog.js');
+            const data = await generate({ github, context, core });
+            // Store full data for next step via output (JSON-encoded)
+            core.setOutput('data', JSON.stringify(data));
+            return data;
+
+      # ── Step 2: Generate release plan ──────────────────────────────────────
+      - name: Generate release plan document
+        id: plan
+        uses: actions/github-script@v7
+        env:
+          CHANGELOG_DATA: ${{ steps.changelog.outputs.data }}
+        with:
+          script: |
+            const generatePlan = require('./scripts/generate-release-plan.js');
+            const data = JSON.parse(process.env.CHANGELOG_DATA);
+            const plan = generatePlan(data);
+            core.setOutput('content', plan);
+            core.setOutput('new_version', data.newVersion);
+            return plan;
+
+      # ── Step 3: Update CHANGELOG.md via GitHub API ─────────────────────────
+      - name: Update CHANGELOG.md
+        id: update_changelog
+        uses: actions/github-script@v7
+        env:
+          CHANGELOG_ENTRY: ${{ steps.changelog.outputs.changelog_entry }}
+          NEW_VERSION: ${{ steps.plan.outputs.new_version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        with:
+          script: |
+            const entry = process.env.CHANGELOG_ENTRY;
+            const version = process.env.NEW_VERSION;
+            const dryRun = process.env.DRY_RUN === 'true';
+
+            // Read current CHANGELOG.md
+            let currentContent = '';
+            let fileSha = undefined;
+            try {
+              const { data: file } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: 'CHANGELOG.md',
+                ref: 'main'
+              });
+              currentContent = Buffer.from(file.content, 'base64').toString('utf8');
+              fileSha = file.sha;
+            } catch (e) {
+              currentContent = '# Changelog\n\nAll notable changes to this project are documented here.\n\n';
+            }
+
+            // Inject new entry after the header block
+            const headerEnd = currentContent.indexOf('\n## ');
+            let newContent;
+            if (headerEnd === -1) {
+              newContent = currentContent + '\n' + entry;
+            } else {
+              newContent = currentContent.slice(0, headerEnd) + '\n\n' + entry + currentContent.slice(headerEnd + 1);
+            }
+
+            if (dryRun) {
+              core.info('DRY RUN — skipping CHANGELOG.md commit');
+              core.setOutput('skipped', 'true');
+              return;
+            }
+
+            const params = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'CHANGELOG.md',
+              message: `chore(release): update CHANGELOG.md for ${version} [skip-release]`,
+              content: Buffer.from(newContent).toString('base64'),
+              branch: 'main',
+            };
+            if (fileSha) params.sha = fileSha;
+
+            await github.rest.repos.createOrUpdateFileContents(params);
+            core.info(`CHANGELOG.md updated for ${version}`);
+            core.setOutput('skipped', 'false');
+
+      # ── Step 4: Write release plan to a temp file ───────────────────────────
+      - name: Write release plan file
+        run: |
+          mkdir -p /tmp/release-artifacts
+          cat > /tmp/release-artifacts/release-plan.md << 'RELEASE_PLAN_EOF'
+          ${{ steps.plan.outputs.content }}
+          RELEASE_PLAN_EOF
+
+      # ── Step 5: Create git tag & GitHub Release ─────────────────────────────
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        env:
+          CHANGELOG_ENTRY: ${{ steps.changelog.outputs.changelog_entry }}
+          NEW_VERSION: ${{ steps.plan.outputs.new_version }}
+          BUMP_TYPE: ${{ steps.changelog.outputs.bump_type }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        with:
+          script: |
+            const version = process.env.NEW_VERSION;
+            const entry = process.env.CHANGELOG_ENTRY;
+            const bumpType = process.env.BUMP_TYPE;
+            const dryRun = process.env.DRY_RUN === 'true';
+
+            if (dryRun) {
+              core.info(`DRY RUN — would create release ${version} (${bumpType} bump)`);
+              core.info('Release notes preview:\n' + entry);
+              return;
+            }
+
+            const isPrerelease = false;
+            const isMajor = bumpType === 'major';
+
+            try {
+              await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: version,
+                target_commitish: 'main',
+                name: `${version}${isMajor ? ' 🎉' : ''}`,
+                body: entry,
+                draft: false,
+                prerelease: isPrerelease,
+                generate_release_notes: false,
+              });
+              core.info(`✅ GitHub Release ${version} created`);
+            } catch (e) {
+              // Tag may already exist on re-runs
+              if (e.status === 422) {
+                core.warning(`Release ${version} already exists — skipping`);
+              } else {
+                throw e;
+              }
+            }
+
+      # ── Step 6: Upload release plan as workflow artifact ────────────────────
+      - name: Upload release plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-plan-${{ steps.plan.outputs.new_version }}
+          path: /tmp/release-artifacts/release-plan.md
+          retention-days: 90
