@@ -121,11 +121,13 @@ jobs:
               currentContent = '# Changelog\n\nAll notable changes to this project are documented here.\n\n';
             }
 
-            // Remove any previous bot-written entry for this PR (identified by PR number)
-            const prevEntryRe = new RegExp(
-              `## \\[v[\\d.]+\\][^\\n]*\\n+> PR: \\[#${pr.number}\\][^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`
-            );
-            const cleaned = currentContent.replace(prevEntryRe, '').replace(/\n{3,}/g, '\n\n');
+            // Skip if an entry for this PR already exists (written by a previous run)
+            if (currentContent.includes(`> PR: [#${pr.number}]`)) {
+              core.info(`CHANGELOG.md already contains an entry for PR #${pr.number} — skipping`);
+              return;
+            }
+
+            const cleaned = currentContent.replace(/\n{3,}/g, '\n\n');
 
             // Inject after the header block
             const headerEnd  = cleaned.indexOf('\n## ');
