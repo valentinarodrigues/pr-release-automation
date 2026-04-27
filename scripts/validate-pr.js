@@ -18,7 +18,7 @@ module.exports = async ({ github, context, core }) => {
   // Supports both patterns:
   //   feat/PROJ-123-description
   //   Vr/feat/PROJ-123/description  (username prefix, slash separator)
-  const BRANCH_RE = /^(?:[A-Za-z0-9]+\/)?(feat|fix|chore|docs|refactor|test|hotfix|release)\/([A-Z][A-Z0-9]+-\d+)[\/\-][\w-]+$/;
+  const BRANCH_RE = /^(?:[A-Za-z0-9]+\/)?(feat(?:ure)?|fix|chore|docs|refactor|test|hotfix|release)\/([A-Z][A-Z0-9]+-\d+)[\/\-][\w-]+$/;
   const branchMatch = BRANCH_RE.exec(branch);
   let jiraFromBranch = null;
 
