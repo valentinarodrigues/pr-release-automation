@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -19,8 +19,127 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run PR validations
+        id: validate
         uses: actions/github-script@v7
         with:
           script: |
             const validate = require('./scripts/validate-pr.js');
             await validate({ github, context, core });
+
+      # Commit CHANGELOG.md onto the PR branch so it lands in main on merge.
+      # Skipped when the bot itself is the actor to prevent an infinite loop.
+      - name: Update CHANGELOG.md on PR branch
+        if: github.actor != 'github-actions[bot]'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const repo = context.repo;
+
+            // ── Collect commits in this PR ────────────────────────────────────
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: repo.owner, repo: repo.repo,
+              pull_number: pr.number, per_page: 100
+            });
+
+            // ── Parse conventional commits ────────────────────────────────────
+            const COMMIT_RE = /^(feat(?:ure)?|fix|chore|docs|refactor|test|hotfix|perf|ci|build|revert)(\(([^)]+)\))?(!)?: (.+)/;
+            const parsed = commits.map(c => {
+              const msg = c.commit.message.split('\n')[0];
+              const m = COMMIT_RE.exec(msg);
+              if (!m || msg.startsWith('Merge')) return null;
+              const [, type, , scope, bang, description] = m;
+              const isBreaking = !!bang || c.commit.message.includes('BREAKING CHANGE:');
+              const tickets = [...new Set((c.commit.message.match(/[A-Z][A-Z0-9]+-\d+/g) || []))];
+              return { type, scope: scope || null, breaking: isBreaking, description, sha: c.sha.slice(0, 7), tickets };
+            }).filter(Boolean);
+
+            // ── Compute tentative next version ────────────────────────────────
+            let latestTag = null;
+            try {
+              const { data: tags } = await github.rest.repos.listTags({
+                owner: repo.owner, repo: repo.repo, per_page: 10
+              });
+              latestTag = tags.find(t => /^v\d+\.\d+\.\d+$/.test(t.name))?.name || null;
+            } catch (_) {}
+
+            const hasBreaking = parsed.some(c => c.breaking);
+            const hasFeat     = parsed.some(c => ['feat', 'feature'].includes(c.type));
+            let bumpType = hasBreaking ? 'major' : hasFeat ? 'minor' : 'patch';
+
+            let version = 'v0.1.0';
+            if (latestTag) {
+              const [maj, min, pat] = latestTag.replace('v', '').split('.').map(Number);
+              if (bumpType === 'major')      version = `v${maj + 1}.0.0`;
+              else if (bumpType === 'minor') version = `v${maj}.${min + 1}.0`;
+              else                           version = `v${maj}.${min}.${pat + 1}`;
+            }
+
+            // ── Group and format ──────────────────────────────────────────────
+            const g = {
+              breaking: parsed.filter(c => c.breaking),
+              feat:     parsed.filter(c => !c.breaking && ['feat','feature'].includes(c.type)),
+              fix:      parsed.filter(c => !c.breaking && c.type === 'fix'),
+              perf:     parsed.filter(c => !c.breaking && c.type === 'perf'),
+              other:    parsed.filter(c => !c.breaking && !['feat','feature','fix','perf'].includes(c.type)),
+            };
+            const fmt = c => {
+              const scope   = c.scope   ? ` **${c.scope}**:` : '';
+              const tickets = c.tickets.length ? ` (${c.tickets.join(', ')})` : '';
+              return `- ${scope} ${c.description}${tickets} (\`${c.sha}\`)`;
+            };
+
+            const today    = new Date().toISOString().slice(0, 10);
+            const base     = latestTag || 'HEAD';
+            const prLink   = `[#${pr.number}](${pr.html_url})`;
+            const compare  = `https://github.com/${repo.owner}/${repo.repo}/compare/${base}...${version}`;
+
+            let entry = `## [${version}](${compare}) — ${today}\n\n`;
+            entry    += `> PR: ${prLink} — ${pr.title}\n\n`;
+            if (g.breaking.length) entry += `### ⚠️ Breaking Changes\n${g.breaking.map(fmt).join('\n')}\n\n`;
+            if (g.feat.length)     entry += `### ✨ New Features\n${g.feat.map(fmt).join('\n')}\n\n`;
+            if (g.fix.length)      entry += `### 🐛 Bug Fixes\n${g.fix.map(fmt).join('\n')}\n\n`;
+            if (g.perf.length)     entry += `### ⚡ Performance\n${g.perf.map(fmt).join('\n')}\n\n`;
+            if (g.other.length)    entry += `### 🔧 Other Changes\n${g.other.map(fmt).join('\n')}\n\n`;
+
+            if (!parsed.length) {
+              core.info('No conventional commits found — skipping CHANGELOG.md update');
+              return;
+            }
+
+            // ── Read current CHANGELOG.md from PR head branch ─────────────────
+            let currentContent = '';
+            let fileSha;
+            try {
+              const { data: file } = await github.rest.repos.getContent({
+                owner: repo.owner, repo: repo.repo,
+                path: 'CHANGELOG.md', ref: pr.head.ref
+              });
+              currentContent = Buffer.from(file.content, 'base64').toString('utf8');
+              fileSha = file.sha;
+            } catch (_) {
+              currentContent = '# Changelog\n\nAll notable changes to this project are documented here.\n\n';
+            }
+
+            // Remove any previous bot-written entry for this PR (identified by PR number)
+            const prevEntryRe = new RegExp(
+              `## \\[v[\\d.]+\\][^\\n]*\\n+> PR: \\[#${pr.number}\\][^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`
+            );
+            const cleaned = currentContent.replace(prevEntryRe, '').replace(/\n{3,}/g, '\n\n');
+
+            // Inject after the header block
+            const headerEnd  = cleaned.indexOf('\n## ');
+            const newContent = headerEnd === -1
+              ? cleaned + '\n' + entry
+              : cleaned.slice(0, headerEnd) + '\n\n' + entry + cleaned.slice(headerEnd + 1);
+
+            // ── Commit to PR branch ───────────────────────────────────────────
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: repo.owner, repo: repo.repo,
+              path: 'CHANGELOG.md',
+              message: `chore(changelog): update CHANGELOG.md for ${version}`,
+              content: Buffer.from(newContent).toString('base64'),
+              ...(fileSha ? { sha: fileSha } : {}),
+              branch: pr.head.ref
+            });
+            core.info(`✅ CHANGELOG.md committed to branch '${pr.head.ref}' (tentative ${version})`);
