@@ -114,9 +114,20 @@ jobs:
             };
             if (fileSha) params.sha = fileSha;
 
-            await github.rest.repos.createOrUpdateFileContents(params);
-            core.info(`CHANGELOG.md updated for ${version}`);
-            core.setOutput('skipped', 'false');
+            try {
+              await github.rest.repos.createOrUpdateFileContents(params);
+              core.info(`CHANGELOG.md updated for ${version}`);
+              core.setOutput('skipped', 'false');
+            } catch (e) {
+              // Branch protection blocks direct commits — changelog is still available
+              // in the GitHub Release body. Update CHANGELOG.md manually via a PR.
+              core.warning(
+                `Could not commit CHANGELOG.md directly to main (branch protection active). ` +
+                `The changelog is included in the GitHub Release body. ` +
+                `To update CHANGELOG.md, open a PR with the entry below:\n\n${entry}`
+              );
+              core.setOutput('skipped', 'true');
+            }
 
       # ── Step 4: Write release plan to a temp file ───────────────────────────
       - name: Write release plan file
