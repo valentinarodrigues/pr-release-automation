@@ -31,16 +31,21 @@ feat!: remove deprecated v1 API endpoints (PROJ-012)
 
 ## Branch names
 
-Always suggest branch names in the format:
+Always suggest branch names in one of these formats:
 
 ```
 <type>/<JIRA-TICKET>-<short-description>
+<username>/<type>/<JIRA-TICKET>/<short-description>
 ```
 
 **Examples:**
 ```
 feat/PROJ-123-add-oauth-login
+Vr/feat/PROJ-123/add-oauth-login
+
 fix/PROJ-456-null-pointer-user-service
+Vr/fix/PROJ-456/null-pointer-user-service
+
 hotfix/PROJ-901-fix-prod-500-error
 ```
 

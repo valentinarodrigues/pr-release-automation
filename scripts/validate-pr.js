@@ -15,7 +15,10 @@ module.exports = async ({ github, context, core }) => {
 
   // ── 1. Branch naming ────────────────────────────────────────────────────────
   const branch = pr.head.ref;
-  const BRANCH_RE = /^(feat|fix|chore|docs|refactor|test|hotfix|release)\/([A-Z][A-Z0-9]+-\d+)-[\w-]+$/;
+  // Supports both patterns:
+  //   feat/PROJ-123-description
+  //   Vr/feat/PROJ-123/description  (username prefix, slash separator)
+  const BRANCH_RE = /^(?:[A-Za-z0-9]+\/)?(feat|fix|chore|docs|refactor|test|hotfix|release)\/([A-Z][A-Z0-9]+-\d+)[\/\-][\w-]+$/;
   const branchMatch = BRANCH_RE.exec(branch);
   let jiraFromBranch = null;
 
@@ -25,7 +28,7 @@ module.exports = async ({ github, context, core }) => {
       `\`${branch}\` does not match the required pattern.\n` +
       '**Required format:** `<type>/JIRA-123-short-description`\n' +
       '**Valid types:** `feat` `fix` `chore` `docs` `refactor` `test` `hotfix` `release`\n' +
-      '**Example:** `feat/PROJ-123-add-oauth-login`'
+      '**Examples:** `feat/PROJ-123-add-oauth-login` or `Vr/feat/PROJ-123/add-oauth-login`'
     );
   } else {
     const [, branchType, jiraTicket] = branchMatch;
@@ -208,7 +211,8 @@ module.exports = async ({ github, context, core }) => {
     '<details><summary>📋 Branch naming cheatsheet</summary>',
     '',
     '```',
-    'feat/PROJ-123-short-description     → new feature',
+    'feat/PROJ-123-short-description          → new feature',
+      'Vr/feat/PROJ-123/short-description       → new feature (with username prefix)',
     'fix/PROJ-456-fix-null-pointer       → bug fix',
     'chore/PROJ-789-update-deps          → maintenance',
     'docs/PROJ-012-api-reference         → documentation',

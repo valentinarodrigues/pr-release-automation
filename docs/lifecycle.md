@@ -99,6 +99,7 @@ flowchart TD
 
 ```
 <type>/<JIRA-TICKET>-<short-description>
+<username>/<type>/<JIRA-TICKET>/<short-description>
 
 Types:
   feat      → new feature
@@ -112,7 +113,11 @@ Types:
 
 Examples:
   feat/PROJ-123-oauth-login
+  Vr/feat/PROJ-123/oauth-login
+
   fix/PROJ-456-null-pointer-user-service
+  Vr/fix/PROJ-456/null-pointer-user-service
+
   chore/PROJ-789-upgrade-node-20
   hotfix/PROJ-901-fix-prod-500-error
 ```

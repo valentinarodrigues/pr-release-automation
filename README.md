@@ -57,15 +57,17 @@ On every merge to `main` (excluding the bot's own changelog commit):
 ## Branch & Commit Conventions
 
 ### Branch naming
+
+Both formats are accepted:
 ```
 <type>/<JIRA-TICKET>-<short-description>
+<username>/<type>/<JIRA-TICKET>/<short-description>
 
 feat/PROJ-123-add-oauth-login
+Vr/feat/PROJ-123/add-oauth-login
+
 fix/PROJ-456-null-pointer-in-user-service
 chore/PROJ-789-upgrade-to-node-20
-docs/PROJ-012-update-api-reference
-refactor/PROJ-345-extract-payment-service
-test/PROJ-678-add-integration-tests
 hotfix/PROJ-901-fix-500-on-checkout
 release/PROJ-234-prepare-v2-0-0
 ```
