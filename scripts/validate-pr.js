@@ -18,9 +18,12 @@ module.exports = async ({ github, context, core }) => {
   // Supports both patterns:
   //   feat/PROJ-123-description
   //   Vr/feat/PROJ-123/description  (username prefix, slash separator)
-  const BRANCH_RE = /^(?:[A-Za-z0-9]+\/)?(feat(?:ure)?|fix|chore|docs|refactor|test|hotfix|release)\/([A-Z][A-Z0-9]+-\d+)[\/\-][\w-]+$/;
+  // JIRA ticket is required for feat/fix/refactor/test; optional (warn) for chore/docs/release/hotfix/ci
+  const BRANCH_RE = /^(?:[A-Za-z0-9]+\/)?(feat(?:ure)?|fix|chore|docs|refactor|test|hotfix|release|ci|build)\/([A-Z][A-Z0-9]+-\d+)?[\/\-]?[\w-]+$/;
+  const JIRA_REQUIRED_TYPES = new Set(['feat', 'feature', 'fix', 'refactor', 'test']);
   const branchMatch = BRANCH_RE.exec(branch);
   let jiraFromBranch = null;
+  let branchType = null;
 
   if (!branchMatch) {
     fail(
@@ -31,22 +34,34 @@ module.exports = async ({ github, context, core }) => {
       '**Examples:** `feat/PROJ-123-add-oauth-login` or `Vr/feat/PROJ-123/add-oauth-login`'
     );
   } else {
-    const [, branchType, jiraTicket] = branchMatch;
-    jiraFromBranch = jiraTicket;
-    pass('Branch Name', `\`${branch}\` — type: \`${branchType}\`, ticket: \`${jiraTicket}\``);
+    branchType = branchMatch[1];
+    jiraFromBranch = branchMatch[2] || null;
+    const ticketNote = jiraFromBranch ? `, ticket: \`${jiraFromBranch}\`` : ' _(no JIRA ticket)_';
+    pass('Branch Name', `\`${branch}\` — type: \`${branchType}\`${ticketNote}`);
   }
 
   // ── 2. JIRA ticket consistency ───────────────────────────────────────────────
-  if (jiraFromBranch) {
-    const bodyJiraRefs = (pr.body || '').match(/[A-Z][A-Z0-9]+-\d+/g) || [];
-    if (!bodyJiraRefs.includes(jiraFromBranch)) {
-      warn(
+  if (branchMatch) {
+    const needsJira = JIRA_REQUIRED_TYPES.has(branchType);
+    if (!jiraFromBranch && needsJira) {
+      fail(
         'JIRA Consistency',
-        `Branch references \`${jiraFromBranch}\` but it is not mentioned in the PR description. ` +
-        'Add the ticket reference so reviewers can trace back to the requirement.'
+        `Branch type \`${branchType}\` requires a JIRA ticket in the branch name.\n` +
+        `**Example:** \`${branchType}/PROJ-123-description\``
       );
+    } else if (jiraFromBranch) {
+      const bodyJiraRefs = (pr.body || '').match(/[A-Z][A-Z0-9]+-\d+/g) || [];
+      if (!bodyJiraRefs.includes(jiraFromBranch)) {
+        warn(
+          'JIRA Consistency',
+          `Branch references \`${jiraFromBranch}\` but it is not mentioned in the PR description. ` +
+          'Add the ticket reference so reviewers can trace back to the requirement.'
+        );
+      } else {
+        pass('JIRA Consistency', `\`${jiraFromBranch}\` is referenced in both the branch name and PR description`);
+      }
     } else {
-      pass('JIRA Consistency', `\`${jiraFromBranch}\` is referenced in both the branch name and PR description`);
+      pass('JIRA Consistency', `\`${branchType}\` branches do not require a JIRA ticket`);
     }
   }
 
